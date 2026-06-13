@@ -91,9 +91,28 @@ def test_web_depends_on_api_healthy(compose_config):
 
 def test_web_uses_localhost_api_url(compose_config):
     """Catches buggy variant: learner uses http://api:8000 — browser
-    cannot resolve service-name DNS."""
-    env = normalize_env(compose_config["services"]["web"].get("environment"))
-    url = env.get("NEXT_PUBLIC_API_URL", "")
+    cannot resolve service-name DNS — OR learner sets the URL as a
+    runtime environment variable instead of a Next.js build arg.
+
+    Per the guide's Web service section: NEXT_PUBLIC_API_URL is **baked at
+    build time** by Next.js into the client-side bundle, so it must be
+    declared under `services.web.build.args` (not `environment`).
+    """
+    web_svc = compose_config["services"]["web"]
+    build = web_svc.get("build")
+    args = {}
+    if isinstance(build, dict):
+        args = build.get("args") or {}
+        # Compose accepts args as a list of "KEY=value" entries too.
+        if isinstance(args, list):
+            args = dict(s.split("=", 1) for s in args if "=" in s)
+    url = args.get("NEXT_PUBLIC_API_URL", "")
+    assert url, (
+        "NEXT_PUBLIC_API_URL must be declared as a build arg under "
+        "`services.web.build.args` — Next.js bakes NEXT_PUBLIC_* values "
+        "into the client bundle at build time, so a runtime "
+        "`environment:` entry never reaches the browser."
+    )
     assert "localhost" in url
     assert "//api:" not in url
 
