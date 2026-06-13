@@ -60,8 +60,8 @@ jobs:
           exit 1
       - name: Seed scripts
         run: |
-          bash seed_neo4j.sh
-          bash seed_weaviate.sh
+          bash scripts/seed_neo4j.sh
+          bash scripts/seed_weaviate.sh
       - name: Demo curl
         run: |
           curl -fsS -X POST http://localhost:8000/rag/answer \
