@@ -1,8 +1,14 @@
-"""RAG composer — retrieve → assemble → generate → cite → grounding check.
+"""RAG composer — retrieve -> assemble -> generate -> cite -> grounding check.
 
 Grounding contract: when `answer` is not the empty-retrieval sentinel,
 `len(citations) > 0` is required. Every cited `chunk_id` corresponds to
 a chunk in the top-`k` retrieved from Weaviate.
+
+The Chunk class in Weaviate uses `vectorizer: none` and is seeded with
+pre-computed sentence-transformers embeddings (`all-MiniLM-L6-v2`).
+Queries therefore encode the question on the server side and use
+`with_near_vector`, not `with_near_text` (which requires a configured
+vectorizer module).
 
 Generator called with `do_sample=False` for reproducibility.
 """
@@ -22,6 +28,23 @@ Answer:"""
 
 SENTINEL = "I cannot answer this from the available sources"
 CITATION_PATTERN = re.compile(r"\[(\d+)\]")
+EMBEDDER_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+
+# Lazy-loaded module-level embedder. Loaded on first call; cached after.
+# This matches the seeder's model (see api/seed_weaviate.py). Kept at
+# module scope rather than lifespan because the embedder is internal to
+# the RAG composer; the lifespan-managed resources (Neo4j driver,
+# Weaviate client, spaCy pipeline, flan-t5 generator) are the ones
+# requiring per-request `Depends()` injection.
+_embedder = None
+
+
+def _get_embedder():
+    global _embedder
+    if _embedder is None:
+        from sentence_transformers import SentenceTransformer
+        _embedder = SentenceTransformer(EMBEDDER_MODEL)
+    return _embedder
 
 
 def assemble_prompt(question: str, chunks: list[dict]) -> Tuple[str, dict[int, dict]]:
@@ -59,9 +82,11 @@ def compose_rag(question: str, weaviate_client, generator, k: int = 4) -> dict:
 
     Returns {"answer": str, "citations": list[dict], "confidence": float}.
     """
+    embedder = _get_embedder()
+    vec = embedder.encode(question).tolist()
     raw_query = (
         weaviate_client.query.get("Chunk", ["chunk_id", "text"])
-        .with_near_text({"concepts": [question]})
+        .with_near_vector({"vector": vec})
         .with_limit(k)
         .with_additional(["distance"])
         .do()
